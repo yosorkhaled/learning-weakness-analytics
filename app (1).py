@@ -50,7 +50,7 @@ with st.sidebar:
     3. **Clean** the text
     4. **Download** as structured JSON
     """)
-    st.markdown("**Week 1 Deliverable:** Cleaned structured dataset")
+    st.markdown(" Cleaned structured dataset")
 
 st.markdown("### 📤 Step 1: Upload your PDF slides")
 uploaded_file = st.file_uploader("Choose a PDF file", type=["pdf"])
