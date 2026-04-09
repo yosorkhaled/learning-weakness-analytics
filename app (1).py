@@ -88,10 +88,10 @@ if uploaded_file is not None:
         col_raw, col_clean = st.columns(2)
         with col_raw:
             st.markdown("**📄 Raw Text**")
-            st.text_area("", value=slide["raw_content"] or "(empty)", height=250, key="raw")
+            st.text_area("", value=slide["raw_content"] or "(empty)", height=250, key=f"raw_{slide['slide_id']}")
         with col_clean:
             st.markdown("**✨ Cleaned Text**")
-            st.text_area("", value=slide["content"] or "(empty)", height=250, key="clean")
+            st.text_area("", value=slide["content"] or "(empty)", height=250, key=f"clean_{slide['slide_id']}")
 
         st.markdown(f"**Word count:** {slide['word_count']} words")
         st.markdown("---")
