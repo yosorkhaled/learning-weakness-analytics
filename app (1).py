@@ -16,9 +16,13 @@ st.markdown("---")
 def clean_text(text: str) -> str:
     if not text:
         return ""
+    # 1. Lowercase
     text = text.lower()
+    # 2. Remove bullet symbols
     text = re.sub(r"[•▪▸►●◆◇→\-–—]+", " ", text)
+    # 3. Remove noise characters (keeps Arabic + English + numbers)
     text = re.sub(r"[^\w\s\u0600-\u06FF.,!?]", " ", text)
+    # 4. Normalize whitespace
     text = re.sub(r"\s+", " ", text)
     text = text.strip()
     return text
