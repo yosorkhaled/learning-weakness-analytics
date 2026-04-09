@@ -10,7 +10,7 @@ st.set_page_config(
 )
 
 st.title("📚 Learning Weakness Analytics")
-st.markdown("### Week 1 — PDF Parsing & Data Pipeline")
+st.markdown("### PDF Parsing & Data Pipeline")
 st.markdown("---")
 
 def clean_text(text: str) -> str:
