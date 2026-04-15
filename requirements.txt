@@ -1,1 +1,4 @@
 pdfplumber
+sentence-transformers
+faiss-cpu
+textblob
