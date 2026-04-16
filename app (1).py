@@ -13,23 +13,126 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("📚 Learning Weakness Analytics")
-st.markdown("### PDF Parsing & Data Pipeline")
-st.markdown("---")
+# ─────────────────────────────────────────────
+# CSS
+# ─────────────────────────────────────────────
+st.markdown("""
+<style>
+    .main { background-color: #0e1117; }
+    .stApp { background-color: #0e1117; color: #f0f0f0; }
 
+    .section-box {
+        background: #1a1d27;
+        border: 1px solid #2e3248;
+        border-radius: 14px;
+        padding: 1.5rem 2rem;
+        margin-bottom: 1.5rem;
+    }
+    .slide-card {
+        background: #1e2130;
+        border: 1px solid #2e3248;
+        border-radius: 10px;
+        padding: 1rem 1.2rem;
+        margin-bottom: 0.8rem;
+        transition: border 0.2s;
+    }
+    .slide-card:hover { border-color: #5c6bc0; }
+    .slide-number {
+        font-size: 0.75rem;
+        color: #7986cb;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+    }
+    .slide-content {
+        color: #cfd8dc;
+        font-size: 0.9rem;
+        margin-top: 0.3rem;
+        line-height: 1.6;
+    }
+    .search-section {
+        background: #12151f;
+        border-top: 1px solid #2e3248;
+        padding: 2rem;
+        margin-top: 2rem;
+        border-radius: 14px;
+    }
+    .search-title {
+        font-size: 1.3rem;
+        font-weight: 700;
+        color: #e8eaf6;
+        margin-bottom: 0.3rem;
+    }
+    .search-sub {
+        font-size: 0.85rem;
+        color: #78909c;
+        margin-bottom: 1.2rem;
+    }
+    .result-box {
+        background: #1a237e22;
+        border: 2px solid #3f51b5;
+        border-radius: 12px;
+        padding: 1.2rem 1.5rem;
+        margin-top: 1rem;
+    }
+    .result-slide-num {
+        font-size: 1rem;
+        font-weight: 700;
+        color: #7986cb;
+    }
+    .result-content {
+        color: #e0e0e0;
+        font-size: 0.95rem;
+        margin-top: 0.5rem;
+        line-height: 1.7;
+        border-left: 3px solid #3f51b5;
+        padding-left: 0.8rem;
+    }
+    .no-file-warning {
+        background: #1a1d27;
+        border: 1px dashed #3e4465;
+        border-radius: 10px;
+        padding: 1rem 1.5rem;
+        color: #78909c;
+        font-size: 0.9rem;
+    }
+    div[data-testid="stTextInput"] input {
+        font-size: 1rem !important;
+        padding: 0.8rem 1rem !important;
+        border-radius: 10px !important;
+        background: #1e2130 !important;
+        border: 1.5px solid #3e4465 !important;
+        color: #f0f0f0 !important;
+    }
+    div[data-testid="stTextInput"] input:focus {
+        border-color: #5c6bc0 !important;
+    }
+    .stButton > button {
+        border-radius: 8px;
+        font-weight: 600;
+    }
+    .step-label {
+        font-size: 0.72rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 1.5px;
+        color: #5c6bc0;
+        margin-bottom: 0.3rem;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# ─────────────────────────────────────────────
+# Helper functions
+# ─────────────────────────────────────────────
 def clean_text(text: str) -> str:
     if not text:
         return ""
-    # 1. Lowercase
     text = text.lower()
-    # 2. Remove bullet symbols
     text = re.sub(r"[•▪▸►●◆◇→\-–—]+", " ", text)
-    # 3. Remove noise characters (keeps Arabic + English + numbers)
     text = re.sub(r"[^\w\s\u0600-\u06FF.,!?]", " ", text)
-    # 4. Normalize whitespace
     text = re.sub(r"\s+", " ", text)
-    text = text.strip()
-    return text
+    return text.strip()
 
 def parse_pdf(uploaded_file) -> list:
     slides = []
@@ -45,12 +148,13 @@ def parse_pdf(uploaded_file) -> list:
             })
     return slides
 
-# ── NEW functions for Step 7 ──────────────────────────────────────
 @st.cache_resource
-def load_model(model_name: str):
-    return SentenceTransformer(model_name)
+def load_model():
+    # Using best performing model (all-mpnet-base-v2)
+    return SentenceTransformer("all-mpnet-base-v2")
 
-def build_faiss_index(slides, model):
+def build_faiss_index(slides):
+    model = load_model()
     valid_slides = [s for s in slides if s["content"]]
     texts = [s["content"] for s in valid_slides]
     embeddings = model.encode(texts, show_progress_bar=False)
@@ -60,87 +164,134 @@ def build_faiss_index(slides, model):
     index.add(embeddings_np)
     return index, valid_slides
 
-def search_slide(question, index, model, valid_slides, top_k=3):
+def extract_relevant_snippet(question: str, content: str, max_len: int = 300) -> str:
+    """Return the part of content most relevant to the question."""
+    question_words = set(question.lower().split())
+    sentences = re.split(r'(?<=[.!?])\s+', content)
+    if not sentences:
+        return content[:max_len]
+    # Score each sentence by overlap with question words
+    best_sentence = max(sentences, key=lambda s: len(set(s.lower().split()) & question_words))
+    # Return best sentence + surrounding context
+    idx = sentences.index(best_sentence)
+    start = max(0, idx - 1)
+    end = min(len(sentences), idx + 2)
+    snippet = " ".join(sentences[start:end])
+    return snippet[:max_len] + ("…" if len(snippet) > max_len else "")
+
+def search_slide(question):
+    if "faiss_index" not in st.session_state:
+        return None, None
+    model = load_model()
     corrected = str(TextBlob(question).correct())
     q_emb = np.array(model.encode([corrected])).astype("float32")
     faiss.normalize_L2(q_emb)
-    distances, indices = index.search(q_emb, k=top_k)
-    results = []
-    for rank, (idx, score) in enumerate(zip(indices[0], distances[0])):
-        results.append({"rank": rank + 1, "slide": valid_slides[idx], "score": float(score)})
-    return corrected, results
-# ── END NEW functions ─────────────────────────────────────────────
+    distances, indices = st.session_state["faiss_index"].search(q_emb, k=1)
+    matched_slide = st.session_state["valid_slides"][indices[0][0]]
+    snippet = extract_relevant_snippet(question, matched_slide["content"])
+    return corrected, {"slide_id": matched_slide["slide_id"], "snippet": snippet}
 
+# ─────────────────────────────────────────────
+# Header
+# ─────────────────────────────────────────────
+st.title("📚 Learning Weakness Analytics")
+st.markdown("Upload your lecture slides, explore the content, and ask any question to find the right slide instantly.")
+st.markdown("---")
+
+# ─────────────────────────────────────────────
+# Sidebar
+# ─────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("## ℹ️ About")
+    st.markdown("## ℹ️ How it works")
     st.markdown("""
-    This tool processes your lecture slides:
-    1. **Upload** a PDF file
-    2. **Parse** each slide/page
-    3. **Clean** the text
-    4. **Download** as structured JSON
+    1. **Upload** your PDF slides  
+    2. **Explore** each slide's content  
+    3. **Download** the cleaned JSON  
+    4. **Ask** any question → get the matching slide  
     """)
-    st.markdown(" Cleaned structured dataset")
+    st.markdown("---")
+    if "slides_data" in st.session_state:
+        s = st.session_state["slides_data"]
+        st.metric("Slides loaded", len(s))
+        st.metric("Non-empty", sum(1 for x in s if x["content"]))
 
-st.markdown("### 📤 Step 1: Upload your PDF slides")
-uploaded_file = st.file_uploader("Choose a PDF file", type=["pdf"])
+# ─────────────────────────────────────────────
+# STEP 1 — Upload
+# ─────────────────────────────────────────────
+st.markdown('<div class="step-label">Step 1</div>', unsafe_allow_html=True)
+st.markdown("### 📤 Upload your PDF slides")
+uploaded_file = st.file_uploader("Choose a PDF file", type=["pdf"], label_visibility="collapsed")
 
 if uploaded_file is not None:
-    st.success(f"✅ File uploaded: **{uploaded_file.name}**")
-    st.markdown("---")
-    st.markdown("### ⚙️ Step 2: Process the PDF")
+    st.success(f"✅ **{uploaded_file.name}** uploaded successfully")
 
     if st.button("🚀 Parse & Clean PDF", type="primary"):
-        with st.spinner("Processing your PDF... please wait"):
+        with st.spinner("Processing..."):
             try:
                 slides_data = parse_pdf(uploaded_file)
                 st.session_state["slides_data"] = slides_data
                 st.session_state["filename"] = uploaded_file.name
+                # Build index right after parsing
+                with st.spinner("Building search index..."):
+                    index, valid_slides = build_faiss_index(slides_data)
+                    st.session_state["faiss_index"] = index
+                    st.session_state["valid_slides"] = valid_slides
+                st.session_state.pop("search_result", None)
             except Exception as e:
                 st.error(f"❌ Error: {str(e)}")
 
-    if "slides_data" in st.session_state:
-        slides_data = st.session_state["slides_data"]
-        st.markdown("---")
-        st.markdown("### 📊 Step 3: Results")
+if "slides_data" in st.session_state:
+    slides_data = st.session_state["slides_data"]
 
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Total Slides", len(slides_data))
-        col2.metric("Non-empty Slides", sum(1 for s in slides_data if s["content"]))
-        col3.metric("Total Words", sum(s["word_count"] for s in slides_data))
+    st.markdown("---")
 
-        st.markdown("---")
-        st.markdown("### 🔍 Step 4: Preview Slides")
+    # ─────────────────────────────────────────────
+    # STEP 2 — Stats
+    # ─────────────────────────────────────────────
+    st.markdown('<div class="step-label">Step 2</div>', unsafe_allow_html=True)
+    st.markdown("### 📊 Results")
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Total Slides", len(slides_data))
+    col2.metric("Non-empty Slides", sum(1 for s in slides_data if s["content"]))
+    col3.metric("Total Words", sum(s["word_count"] for s in slides_data))
 
-        selected = st.selectbox(
-            "Select a slide:",
-            options=[f"Slide {s['slide_id']}" for s in slides_data]
-        )
-        idx = int(selected.split(" ")[1]) - 1
-        slide = slides_data[idx]
+    st.markdown("---")
 
-        col_raw, col_clean = st.columns(2)
-        with col_raw:
-            st.markdown("**📄 Raw Text**")
-            st.text_area("", value=slide["raw_content"] or "(empty)", height=250, key=f"raw_{slide['slide_id']}")
-        with col_clean:
-            st.markdown("**✨ Cleaned Text**")
-            st.text_area("", value=slide["content"] or "(empty)", height=250, key=f"clean_{slide['slide_id']}")
+    # ─────────────────────────────────────────────
+    # STEP 3 — Preview slides as cards
+    # ─────────────────────────────────────────────
+    st.markdown('<div class="step-label">Step 3</div>', unsafe_allow_html=True)
+    st.markdown("### 🔍 Slides Preview")
 
-        st.markdown(f"**Word count:** {slide['word_count']} words")
-        st.markdown("---")
-        st.markdown("### 📋 Step 5: JSON Preview")
+    cols = st.columns(2)
+    for i, slide in enumerate(slides_data):
+        with cols[i % 2]:
+            preview = slide["raw_content"][:180] + ("…" if len(slide["raw_content"]) > 180 else "") if slide["raw_content"] else "(empty)"
+            st.markdown(f"""
+            <div class="slide-card">
+                <div class="slide-number">Slide {slide['slide_id']} &nbsp;·&nbsp; {slide['word_count']} words</div>
+                <div class="slide-content">{preview}</div>
+            </div>
+            """, unsafe_allow_html=True)
 
-        output_json = [{"slide_id": s["slide_id"], "content": s["content"]} for s in slides_data]
-        st.json(output_json[:3])
-        st.caption("Showing first 3 slides only.")
+    st.markdown("---")
 
-        st.markdown("---")
-        st.markdown("### 💾 Step 6: Download Dataset")
+    # ─────────────────────────────────────────────
+    # STEP 4 — Download JSON
+    # ─────────────────────────────────────────────
+    st.markdown('<div class="step-label">Step 4</div>', unsafe_allow_html=True)
+    st.markdown("### 💾 Download Dataset")
 
-        json_str = json.dumps(output_json, ensure_ascii=False, indent=2)
-        fname = st.session_state["filename"].replace(".pdf", "")
+    output_json = [{"slide_id": s["slide_id"], "content": s["content"]} for s in slides_data]
+    json_str = json.dumps(output_json, ensure_ascii=False, indent=2)
+    fname = st.session_state["filename"].replace(".pdf", "")
 
+    col_prev, col_dl = st.columns([2, 1])
+    with col_prev:
+        st.json(output_json[:2])
+        st.caption("Showing first 2 slides only.")
+    with col_dl:
+        st.markdown("<br><br>", unsafe_allow_html=True)
         st.download_button(
             label="⬇️ Download JSON File",
             data=json_str.encode("utf-8"),
@@ -149,69 +300,45 @@ if uploaded_file is not None:
             type="primary"
         )
 
-        # ── NEW: Step 7 ───────────────────────────────────────────
-        st.markdown("---")
-        st.markdown("### 🤖 Step 7: Ask a Question — Find the Right Slide")
-        st.caption("Type any question and the AI will find which slide contains the answer.")
+# ─────────────────────────────────────────────
+# STEP 5 — Search bar (always visible at bottom)
+# ─────────────────────────────────────────────
+st.markdown("---")
+st.markdown('<div class="step-label">Step 5</div>', unsafe_allow_html=True)
+st.markdown("### 🔎 Ask a Question")
+st.markdown("Type any question about your slides and we'll find the most relevant slide for you.")
 
-        model_choice = st.selectbox(
-            "🧠 Choose Embedding Model:",
-            options=[
-                "all-MiniLM-L6-v2",
-                "all-mpnet-base-v2",
-                "paraphrase-multilingual-MiniLM-L12-v2",
-            ],
-            help="all-MiniLM-L6-v2 is fastest. all-mpnet-base-v2 is most accurate. Multilingual supports Arabic+English."
-        )
+if "slides_data" not in st.session_state:
+    st.markdown("""
+    <div class="no-file-warning">
+        📂 Upload and process a PDF first (Step 1) to enable search.
+    </div>
+    """, unsafe_allow_html=True)
 
-        if st.button("⚡ Build Search Index"):
-            with st.spinner(f"Loading '{model_choice}' and building index..."):
-                model = load_model(model_choice)
-                index, valid_slides = build_faiss_index(slides_data, model)
-                st.session_state["faiss_index"] = index
-                st.session_state["valid_slides"] = valid_slides
-                st.session_state["qa_model"] = model
-                st.session_state["qa_model_name"] = model_choice
-            st.success(f"✅ Index built with {len(valid_slides)} slides using **{model_choice}**")
+question = st.text_input(
+    label="question",
+    placeholder="e.g.  What is the data science lifecycle?  /  What are the data sources?",
+    label_visibility="collapsed",
+)
 
-        if "faiss_index" in st.session_state:
-            question = st.text_input(
-                "❓ Enter your question:",
-                placeholder="e.g. What is machine learning? / what are the data soureces?"
-            )
+search_clicked = st.button("🔍 Find Slide", type="primary", disabled=("faiss_index" not in st.session_state))
 
-            if st.button("🔍 Find Slide", type="primary"):
-                if not question.strip():
-                    st.warning("⚠️ Please enter a question first.")
-                else:
-                    with st.spinner("Searching..."):
-                        corrected, results = search_slide(
-                            question,
-                            st.session_state["faiss_index"],
-                            st.session_state["qa_model"],
-                            st.session_state["valid_slides"],
-                        )
+if search_clicked and question.strip():
+    with st.spinner("Searching..."):
+        corrected, result = search_slide(question)
 
-                    if corrected.lower() != question.strip().lower():
-                        st.info(f"✏️ Spell-corrected to: **{corrected}**")
+    if result:
+        if corrected.lower() != question.strip().lower():
+            st.info(f"✏️ Spell-corrected to: **{corrected}**")
 
-                    st.markdown("#### 🎯 Top Results:")
-                    medals = ["🥇", "🥈", "🥉"]
-                    for r in results:
-                        slide_id = r["slide"]["slide_id"]
-                        preview = r["slide"]["content"][:300] + ("…" if len(r["slide"]["content"]) > 300 else "")
-                        score = round(r["score"] * 100, 1)
-                        medal = medals[r["rank"] - 1]
-                        if r["rank"] == 1:
-                            st.success(f"{medal} **Best Match — Slide {slide_id}** (similarity: {score}%)\n\n{preview}")
-                        else:
-                            st.info(f"{medal} **#{r['rank']} Match — Slide {slide_id}** (similarity: {score}%)\n\n{preview}")
-        # ── END NEW ───────────────────────────────────────────────
+        st.markdown(f"""
+        <div class="result-box">
+            <div class="result-slide-num">📌 Slide {result['slide_id']}</div>
+            <div class="result-content">{result['snippet']}</div>
+        </div>
+        """, unsafe_allow_html=True)
+elif search_clicked and not question.strip():
+    st.warning("⚠️ Please enter a question first.")
 
 else:
     st.info("👆 Upload a PDF file to get started.")
-    st.markdown("### 📋 Example Output Format")
-    st.json([
-        {"slide_id": 1, "content": "introduction to machine learning"},
-        {"slide_id": 2, "content": "supervised learning classification regression"},
-    ])
