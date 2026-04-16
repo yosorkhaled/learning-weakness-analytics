@@ -317,7 +317,7 @@ if "slides_data" not in st.session_state:
 
 question = st.text_input(
     label="question",
-    placeholder="e.g.  What is the data science lifecycle?  /  What are the data sources?",
+    placeholder=" Ask anything",
     label_visibility="collapsed",
 )
 
