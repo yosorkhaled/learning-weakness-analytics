@@ -14,9 +14,6 @@ st.set_page_config(
     layout="wide"
 )
 
-# ─────────────────────────────────────────────
-# CSS
-# ─────────────────────────────────────────────
 st.markdown("""
 <style>
     .main { background-color: #0e1117; }
@@ -102,10 +99,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────
-# Helper functions
-# ─────────────────────────────────────────────
-# ─────────────────────────────────────────────
-# Technical terms spell correction
+# Technical terms protection
 # ─────────────────────────────────────────────
 TECHNICAL_TERMS = {
     "NaN", "null", "None", "True", "False", "API", "JSON", "PDF",
@@ -117,7 +111,7 @@ def correct_spelling(text):
     masked = text
     placeholders = {}
     for i, term in enumerate(TECHNICAL_TERMS):
-        placeholder = f"TECHTERM{i}"
+        placeholder = f"ZZZTECHZZZ{i}ZZZ"
         placeholders[placeholder] = term
         masked = re.sub(rf'\b{term}\b', placeholder, masked, flags=re.IGNORECASE)
     corrected = str(TextBlob(masked).correct())
@@ -125,6 +119,9 @@ def correct_spelling(text):
         corrected = corrected.replace(placeholder, term)
     return corrected
 
+# ─────────────────────────────────────────────
+# Helper functions
+# ─────────────────────────────────────────────
 def clean_text(text: str) -> str:
     if not text:
         return ""
@@ -179,10 +176,10 @@ def retrieve_best_slide(question, valid_slides, faiss_index):
     k = min(k, n)
 
     distances, indices = faiss_index.search(q_emb, k=k)
-    top_slides = [valid_slides[i] for i in indices[0]]
+    top_slides = [valid_slides[i] for i in indices[0] if i < len(valid_slides)]
 
     if k == 1:
-        return corrected, top_slides[0]
+        return top_slides[0]
 
     client = Groq(api_key=st.session_state["groq_api_key"])
     slides_text = "\n\n".join([
@@ -209,7 +206,7 @@ Best slide number:"""
     except:
         result = top_slides[0]
 
-    return corrected, result
+    return result
 
 def extract_relevant_snippet(question: str, content: str, max_len: int = 400) -> str:
     question_words = set(question.lower().split())
@@ -223,17 +220,19 @@ def extract_relevant_snippet(question: str, content: str, max_len: int = 400) ->
     snippet = " ".join(sentences[start:end])
     return snippet[:max_len] + ("…" if len(snippet) > max_len else "")
 
-def get_llm_explanation(question, snippet, api_key):
+def get_llm_explanation(question, slide_content, api_key):
+    """LLM answers the question based on full slide content."""
     client = Groq(api_key=api_key)
     prompt = f"""You are a helpful teaching assistant.
 
 A student asked: {question}
 
-The exact answer from the lecture slide is:
-"{snippet}"
+The full slide content is:
+"{slide_content}"
 
-Your job is to explain this answer simply and clearly in 2-3 sentences.
-Do NOT add any information that is not in the slide content above."""
+Answer the student's question based ONLY on the slide content above.
+Be clear and concise in 2-3 sentences.
+If the answer is not in the slide, say "This topic is not covered in this slide." """
 
     response = client.chat.completions.create(
         model="llama-3.1-8b-instant",
@@ -374,12 +373,10 @@ else:
     if "chat_history" not in st.session_state:
         st.session_state["chat_history"] = []
 
-    # display chat history
     for msg in st.session_state["chat_history"]:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    # chat input
     question = st.chat_input("Ask anything about your slides...")
 
     if question:
@@ -389,14 +386,11 @@ else:
 
         with st.chat_message("assistant"):
             with st.spinner("Finding the right slide..."):
-                corrected, matched_slide = retrieve_best_slide(
+                matched_slide = retrieve_best_slide(
                     question,
                     st.session_state["valid_slides"],
                     st.session_state["faiss_index"],
                 )
-
-            if corrected.lower() != question.strip().lower():
-                st.info(f"✏️ Spell-corrected to: **{corrected}**")
 
             st.markdown(f"📌 **Found in Slide {matched_slide['slide_id']}**")
 
