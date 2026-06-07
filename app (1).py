@@ -6,6 +6,7 @@ import numpy as np
 from sentence_transformers import SentenceTransformer
 import faiss
 from textblob import TextBlob
+from groq import Groq
 
 st.set_page_config(
     page_title="Learning Weakness Analytics",
@@ -50,24 +51,6 @@ st.markdown("""
         margin-top: 0.3rem;
         line-height: 1.6;
     }
-    .search-section {
-        background: #12151f;
-        border-top: 1px solid #2e3248;
-        padding: 2rem;
-        margin-top: 2rem;
-        border-radius: 14px;
-    }
-    .search-title {
-        font-size: 1.3rem;
-        font-weight: 700;
-        color: #e8eaf6;
-        margin-bottom: 0.3rem;
-    }
-    .search-sub {
-        font-size: 0.85rem;
-        color: #78909c;
-        margin-bottom: 1.2rem;
-    }
     .result-box {
         background: #1a237e22;
         border: 2px solid #3f51b5;
@@ -87,6 +70,26 @@ st.markdown("""
         line-height: 1.7;
         border-left: 3px solid #3f51b5;
         padding-left: 0.8rem;
+    }
+    .answer-box {
+        background: #0d2b1f;
+        border: 2px solid #2e7d52;
+        border-radius: 12px;
+        padding: 1.2rem 1.5rem;
+        margin-top: 1rem;
+    }
+    .answer-label {
+        font-size: 0.8rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        color: #4caf90;
+        margin-bottom: 0.5rem;
+    }
+    .answer-text {
+        color: #e0e0e0;
+        font-size: 0.95rem;
+        line-height: 1.7;
     }
     .no-file-warning {
         background: #1a1d27;
@@ -150,7 +153,6 @@ def parse_pdf(uploaded_file) -> list:
 
 @st.cache_resource
 def load_model():
-    # Using best performing model (all-mpnet-base-v2)
     return SentenceTransformer("all-mpnet-base-v2")
 
 def build_faiss_index(slides):
@@ -164,32 +166,89 @@ def build_faiss_index(slides):
     index.add(embeddings_np)
     return index, valid_slides
 
-def extract_relevant_snippet(question: str, content: str, max_len: int = 300) -> str:
+def retrieve_best_slide(question, valid_slides, faiss_index):
+    """Adaptive retrieval: k depends on number of slides."""
+    model = load_model()
+    corrected = str(TextBlob(question).correct())
+    q_emb = np.array(model.encode([corrected])).astype("float32")
+    faiss.normalize_L2(q_emb)
+
+    n = len(valid_slides)
+    if n <= 50:
+        k = 1
+    elif n <= 100:
+        k = 3
+    else:
+        k = 5
+    k = min(k, n)
+
+    distances, indices = faiss_index.search(q_emb, k=k)
+    top_slides = [valid_slides[i] for i in indices[0]]
+
+    # if k=1 return directly
+    if k == 1:
+        return corrected, top_slides[0]
+
+    # LLM picks the best slide
+    client = Groq(api_key=st.session_state["groq_api_key"])
+    slides_text = "\n\n".join([
+        f"Slide {s['slide_id']}: {s['content'][:300]}"
+        for s in top_slides
+    ])
+    pick_prompt = f"""You are given {k} slides and a student question.
+Pick the ONE slide that best answers the question.
+Return ONLY the slide number as a single integer, nothing else.
+
+{slides_text}
+
+Question: {question}
+Best slide number:"""
+
+    response = client.chat.completions.create(
+        model="llama-3.1-8b-instant",
+        messages=[{"role": "user", "content": pick_prompt}],
+        max_tokens=5,
+    )
+    try:
+        best_id = int(response.choices[0].message.content.strip())
+        result = next((s for s in top_slides if s["slide_id"] == best_id), top_slides[0])
+    except:
+        result = top_slides[0]
+
+    return corrected, result
+
+def extract_relevant_snippet(question: str, content: str, max_len: int = 400) -> str:
     """Return the part of content most relevant to the question."""
     question_words = set(question.lower().split())
     sentences = re.split(r'(?<=[.!?])\s+', content)
     if not sentences:
         return content[:max_len]
-    # Score each sentence by overlap with question words
     best_sentence = max(sentences, key=lambda s: len(set(s.lower().split()) & question_words))
-    # Return best sentence + surrounding context
     idx = sentences.index(best_sentence)
     start = max(0, idx - 1)
     end = min(len(sentences), idx + 2)
     snippet = " ".join(sentences[start:end])
     return snippet[:max_len] + ("…" if len(snippet) > max_len else "")
 
-def search_slide(question):
-    if "faiss_index" not in st.session_state:
-        return None, None
-    model = load_model()
-    corrected = str(TextBlob(question).correct())
-    q_emb = np.array(model.encode([corrected])).astype("float32")
-    faiss.normalize_L2(q_emb)
-    distances, indices = st.session_state["faiss_index"].search(q_emb, k=1)
-    matched_slide = st.session_state["valid_slides"][indices[0][0]]
-    snippet = extract_relevant_snippet(question, matched_slide["content"])
-    return corrected, {"slide_id": matched_slide["slide_id"], "snippet": snippet}
+def get_llm_explanation(question, snippet, api_key):
+    """LLM explains the exact snippet from the slide."""
+    client = Groq(api_key=api_key)
+    prompt = f"""You are a helpful teaching assistant.
+
+A student asked: {question}
+
+The exact answer from the lecture slide is:
+"{snippet}"
+
+Your job is to explain this answer simply and clearly in 2-3 sentences.
+Do NOT add any information that is not in the slide content above."""
+
+    response = client.chat.completions.create(
+        model="llama-3.1-8b-instant",
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=300,
+    )
+    return response.choices[0].message.content.strip()
 
 # ─────────────────────────────────────────────
 # Header
@@ -207,8 +266,19 @@ with st.sidebar:
     1. **Upload** your PDF slides  
     2. **Explore** each slide's content  
     3. **Download** the cleaned JSON  
-    4. **Ask** any question → get the matching slide  
+    4. **Ask** any question → get the matching slide + AI answer  
     """)
+    st.markdown("---")
+    st.markdown("## 🔑 Groq API Key")
+    api_key_input = st.text_input(
+        "Enter your Groq API key:",
+        type="password",
+        placeholder="gsk_...",
+    )
+    if api_key_input:
+        st.session_state["groq_api_key"] = api_key_input
+        st.success("✅ API key saved!")
+
     st.markdown("---")
     if "slides_data" in st.session_state:
         s = st.session_state["slides_data"]
@@ -231,7 +301,6 @@ if uploaded_file is not None:
                 slides_data = parse_pdf(uploaded_file)
                 st.session_state["slides_data"] = slides_data
                 st.session_state["filename"] = uploaded_file.name
-                # Build index right after parsing
                 with st.spinner("Building search index..."):
                     index, valid_slides = build_faiss_index(slides_data)
                     st.session_state["faiss_index"] = index
@@ -301,12 +370,12 @@ if "slides_data" in st.session_state:
         )
 
 # ─────────────────────────────────────────────
-# STEP 5 — Search bar (always visible at bottom)
+# STEP 5 — Search + LLM Answer
 # ─────────────────────────────────────────────
 st.markdown("---")
 st.markdown('<div class="step-label">Step 5</div>', unsafe_allow_html=True)
 st.markdown("### 🔎 Ask a Question")
-st.markdown("Type any question about your slides and we'll find the most relevant slide for you.")
+st.markdown("Type any question and the AI will find the right slide and answer your question.")
 
 if "slides_data" not in st.session_state:
     st.markdown("""
@@ -317,28 +386,64 @@ if "slides_data" not in st.session_state:
 
 question = st.text_input(
     label="question",
-    placeholder=" Ask anything",
+    placeholder="Ask anything about your slides...",
     label_visibility="collapsed",
 )
 
-search_clicked = st.button("🔍 Find Slide", type="primary", disabled=("faiss_index" not in st.session_state))
+search_clicked = st.button(
+    "🔍 Find Slide & Answer",
+    type="primary",
+    disabled=("faiss_index" not in st.session_state)
+)
 
 if search_clicked and question.strip():
-    with st.spinner("Searching..."):
-        corrected, result = search_slide(question)
+    if "groq_api_key" not in st.session_state:
+        st.warning("⚠️ Please enter your Groq API key in the sidebar first.")
+    else:
+        with st.spinner("Finding the right slide..."):
+            corrected, matched_slide = retrieve_best_slide(
+                question,
+                st.session_state["valid_slides"],
+                st.session_state["faiss_index"],
+            )
 
-    if result:
         if corrected.lower() != question.strip().lower():
             st.info(f"✏️ Spell-corrected to: **{corrected}**")
 
+        # Show matched slide
         st.markdown(f"""
         <div class="result-box">
-            <div class="result-slide-num">📌 Slide {result['slide_id']}</div>
-            <div class="result-content">{result['snippet']}</div>
+            <div class="result-slide-num">📌 Slide {matched_slide['slide_id']}</div>
+            <div class="result-content">{matched_slide['content'][:300]}{"…" if len(matched_slide['content']) > 300 else ""}</div>
         </div>
         """, unsafe_allow_html=True)
+
+        # Extract exact snippet from slide
+        snippet = extract_relevant_snippet(question, matched_slide["content"])
+
+        st.markdown(f"""
+        <div class="result-box">
+            <div class="answer-label" style="color:#7986cb;">📖 Exact Answer from Slide</div>
+            <div class="result-content">{snippet}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # LLM explains the snippet
+        with st.spinner("Generating explanation..."):
+            explanation = get_llm_explanation(
+                question,
+                snippet,
+                st.session_state["groq_api_key"]
+            )
+
+        st.markdown(f"""
+        <div class="answer-box">
+            <div class="answer-label">🤖 AI Explanation</div>
+            <div class="answer-text">{explanation}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
 elif search_clicked and not question.strip():
     st.warning("⚠️ Please enter a question first.")
-
 else:
     st.info("👆 Upload a PDF file to get started.")
