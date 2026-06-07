@@ -262,15 +262,9 @@ st.markdown("---")
 # ─────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## ℹ️ How it works")
-    st.markdown("""
-    1. **Upload** your PDF slides  
-    2. **Explore** each slide's content  
-    3. **Download** the cleaned JSON  
-    4. **Ask** any question → get the matching slide + AI answer  
-    """)
+    st.markdown("""...""")
     st.markdown("---")
-   st.session_state["groq_api_key"] = "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"
-
+    st.session_state["groq_api_key"] = "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"
     st.markdown("---")
     if "slides_data" in st.session_state:
         s = st.session_state["slides_data"]
