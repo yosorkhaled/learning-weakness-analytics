@@ -269,15 +269,7 @@ with st.sidebar:
     4. **Ask** any question → get the matching slide + AI answer  
     """)
     st.markdown("---")
-    st.markdown("## 🔑 Groq API Key")
-    api_key_input = st.text_input(
-        "Enter your Groq API key:",
-        type="password",
-        placeholder="gsk_...",
-    )
-    if api_key_input:
-        st.session_state["groq_api_key"] = api_key_input
-        st.success("✅ API key saved!")
+   st.session_state["groq_api_key"] = "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"
 
     st.markdown("---")
     if "slides_data" in st.session_state:
