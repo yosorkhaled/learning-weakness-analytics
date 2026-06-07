@@ -160,53 +160,80 @@ def build_faiss_index(slides):
     index.add(embeddings_np)
     return index, valid_slides
 
-def retrieve_best_slide(question, valid_slides, faiss_index):
+def expand_query(question, api_key):
+    """Use LLM to rewrite question with technical keywords closer to slide content."""
+    try:
+        client = Groq(api_key=api_key)
+        prompt = f"""Rewrite this student question using technical keywords that would appear in lecture slides.
+Return ONLY the rewritten question, nothing else. Keep it short (max 20 words).
+
+Question: {question}
+Rewritten:"""
+        response = client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=40,
+        )
+        return response.choices[0].message.content.strip()
+    except:
+        return question
+
+def retrieve_top_slides(question, valid_slides, faiss_index, api_key, top_k=3):
+    """Retrieve top-k most relevant slides using query expansion."""
     model = load_model()
+
+    # Step 1: spell correction
     corrected = correct_spelling(question)
-    q_emb = np.array(model.encode([corrected])).astype("float32")
+
+    # Step 2: query expansion
+    expanded = expand_query(corrected, api_key)
+
+    # Step 3: encode expanded query
+    q_emb = np.array(model.encode([expanded])).astype("float32")
     faiss.normalize_L2(q_emb)
 
+    # Step 4: adaptive k based on document size
     n = len(valid_slides)
     if n <= 50:
-        k = 1
+        k = min(2, n)
     elif n <= 100:
-        k = 3
+        k = min(3, n)
     else:
-        k = 5
-    k = min(k, n)
+        k = min(5, n)
 
     distances, indices = faiss_index.search(q_emb, k=k)
     top_slides = [valid_slides[i] for i in indices[0] if i < len(valid_slides)]
 
-    if k == 1:
-        return top_slides[0]
+    return top_slides
 
-    client = Groq(api_key=st.session_state["groq_api_key"])
-    slides_text = "\n\n".join([
-        f"Slide {s['slide_id']}: {s['content'][:300]}"
+def get_llm_answer(question, top_slides, api_key):
+    """LLM answers based on multiple slides content."""
+    client = Groq(api_key=api_key)
+
+    slides_context = "\n\n".join([
+        f"Slide {s['slide_id']}:\n{s['content']}"
         for s in top_slides
     ])
-    pick_prompt = f"""You are given {k} slides and a student question.
-Pick the ONE slide that best answers the question.
-Return ONLY the slide number as a single integer, nothing else.
 
-{slides_text}
+    prompt = f"""You are a helpful teaching assistant. A student asked a question about lecture slides.
 
-Question: {question}
-Best slide number:"""
+Here are the most relevant slides:
+{slides_context}
+
+Student question: {question}
+
+Answer the student's question based ONLY on the slide content above.
+- Be clear and concise
+- If the answer spans multiple slides, mention which slides
+- If the answer is not in the slides, say "This topic is not covered in the provided slides."
+"""
 
     response = client.chat.completions.create(
         model="llama-3.1-8b-instant",
-        messages=[{"role": "user", "content": pick_prompt}],
-        max_tokens=5,
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=400,
     )
-    try:
-        best_id = int(response.choices[0].message.content.strip())
-        result = next((s for s in top_slides if s["slide_id"] == best_id), top_slides[0])
-    except:
-        result = top_slides[0]
-
-    return result
+    return response.choices[0].message.content.strip()
 
 def extract_relevant_snippet(question: str, content: str, max_len: int = 400) -> str:
     question_words = set(question.lower().split())
@@ -219,27 +246,6 @@ def extract_relevant_snippet(question: str, content: str, max_len: int = 400) ->
     end = min(len(sentences), idx + 2)
     snippet = " ".join(sentences[start:end])
     return snippet[:max_len] + ("…" if len(snippet) > max_len else "")
-
-def get_llm_explanation(question, slide_content, api_key):
-    """LLM answers the question based on full slide content."""
-    client = Groq(api_key=api_key)
-    prompt = f"""You are a helpful teaching assistant.
-
-A student asked: {question}
-
-The full slide content is:
-"{slide_content}"
-
-Answer the student's question based ONLY on the slide content above.
-Be clear and concise in 2-3 sentences.
-If the answer is not in the slide, say "This topic is not covered in this slide." """
-
-    response = client.chat.completions.create(
-        model="llama-3.1-8b-instant",
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=300,
-    )
-    return response.choices[0].message.content.strip()
 
 # ─────────────────────────────────────────────
 # Header
@@ -295,9 +301,7 @@ if "slides_data" in st.session_state:
 
     st.markdown("---")
 
-    # ─────────────────────────────────────────────
     # STEP 2 — Stats
-    # ─────────────────────────────────────────────
     st.markdown('<div class="step-label">Step 2</div>', unsafe_allow_html=True)
     st.markdown("### 📊 Results")
     col1, col2, col3 = st.columns(3)
@@ -307,9 +311,7 @@ if "slides_data" in st.session_state:
 
     st.markdown("---")
 
-    # ─────────────────────────────────────────────
-    # STEP 3 — Preview slides as cards (with toggle)
-    # ─────────────────────────────────────────────
+    # STEP 3 — Preview
     st.markdown('<div class="step-label">Step 3</div>', unsafe_allow_html=True)
     st.markdown("### 🔍 Slides Preview")
 
@@ -332,9 +334,7 @@ if "slides_data" in st.session_state:
 
     st.markdown("---")
 
-    # ─────────────────────────────────────────────
     # STEP 4 — Download JSON
-    # ─────────────────────────────────────────────
     st.markdown('<div class="step-label">Step 4</div>', unsafe_allow_html=True)
     st.markdown("### 💾 Download Dataset")
 
@@ -385,16 +385,20 @@ else:
         st.session_state["chat_history"].append({"role": "user", "content": question})
 
         with st.chat_message("assistant"):
-            with st.spinner("Finding the right slide..."):
-                matched_slide = retrieve_best_slide(
+            with st.spinner("Searching slides..."):
+                top_slides = retrieve_top_slides(
                     question,
                     st.session_state["valid_slides"],
                     st.session_state["faiss_index"],
+                    st.session_state["groq_api_key"],
                 )
 
-            st.markdown(f"📌 **Found in Slide {matched_slide['slide_id']}**")
+            # show slide numbers found
+            slide_ids = ", ".join([f"Slide {s['slide_id']}" for s in top_slides])
+            st.markdown(f"📌 **Searching in: {slide_ids}**")
 
-            snippet = extract_relevant_snippet(question, matched_slide["content"])
+            # show snippet from best slide
+            snippet = extract_relevant_snippet(question, top_slides[0]["content"])
             st.markdown(f"""
             <div class="result-box">
                 <div class="answer-label" style="color:#7986cb;">📖 From the Slide</div>
@@ -402,19 +406,19 @@ else:
             </div>
             """, unsafe_allow_html=True)
 
-            with st.spinner("Generating explanation..."):
-                explanation = get_llm_explanation(
+            with st.spinner("Generating answer..."):
+                answer = get_llm_answer(
                     question,
-                    matched_slide["content"],
+                    top_slides,
                     st.session_state["groq_api_key"]
                 )
 
             st.markdown(f"""
             <div class="answer-box">
-                <div class="answer-label">🤖 AI Explanation</div>
-                <div class="answer-text">{explanation}</div>
+                <div class="answer-label">🤖 AI Answer</div>
+                <div class="answer-text">{answer}</div>
             </div>
             """, unsafe_allow_html=True)
 
-            full_response = f"📌 **Slide {matched_slide['slide_id']}**\n\n📖 {snippet}\n\n🤖 {explanation}"
+            full_response = f"📌 **{slide_ids}**\n\n📖 {snippet}\n\n🤖 {answer}"
             st.session_state["chat_history"].append({"role": "assistant", "content": full_response})
