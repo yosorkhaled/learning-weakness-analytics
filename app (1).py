@@ -7,13 +7,13 @@ from sentence_transformers import SentenceTransformer
 import faiss
 from textblob import TextBlob
 from groq import Groq
- 
+
 st.set_page_config(
     page_title="Learning Weakness Analytics",
     page_icon="📚",
     layout="wide"
 )
- 
+
 # ─────────────────────────────────────────────
 # CSS
 # ─────────────────────────────────────────────
@@ -100,10 +100,31 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
- 
+
 # ─────────────────────────────────────────────
 # Helper functions
 # ─────────────────────────────────────────────
+# ─────────────────────────────────────────────
+# Technical terms spell correction
+# ─────────────────────────────────────────────
+TECHNICAL_TERMS = {
+    "NaN", "null", "None", "True", "False", "API", "JSON", "PDF",
+    "EDA", "ML", "AI", "KYD", "VOC", "ABA", "SQL", "CSV", "URL",
+    "HTTP", "HTTPS", "DataFrame", "numpy", "pandas", "sklearn"
+}
+
+def correct_spelling(text):
+    masked = text
+    placeholders = {}
+    for i, term in enumerate(TECHNICAL_TERMS):
+        placeholder = f"TECHTERM{i}"
+        placeholders[placeholder] = term
+        masked = re.sub(rf'\b{term}\b', placeholder, masked, flags=re.IGNORECASE)
+    corrected = str(TextBlob(masked).correct())
+    for placeholder, term in placeholders.items():
+        corrected = corrected.replace(placeholder, term)
+    return corrected
+
 def clean_text(text: str) -> str:
     if not text:
         return ""
@@ -112,7 +133,7 @@ def clean_text(text: str) -> str:
     text = re.sub(r"[^\w\s\u0600-\u06FF.,!?]", " ", text)
     text = re.sub(r"\s+", " ", text)
     return text.strip()
- 
+
 def parse_pdf(uploaded_file) -> list:
     slides = []
     with pdfplumber.open(uploaded_file) as pdf:
@@ -126,11 +147,11 @@ def parse_pdf(uploaded_file) -> list:
                 "word_count": len(cleaned.split()) if cleaned else 0
             })
     return slides
- 
+
 @st.cache_resource
 def load_model():
     return SentenceTransformer("all-mpnet-base-v2")
- 
+
 def build_faiss_index(slides):
     model = load_model()
     valid_slides = [s for s in slides if s["content"]]
@@ -141,13 +162,13 @@ def build_faiss_index(slides):
     index = faiss.IndexFlatIP(embeddings_np.shape[1])
     index.add(embeddings_np)
     return index, valid_slides
- 
+
 def retrieve_best_slide(question, valid_slides, faiss_index):
     model = load_model()
-    corrected = str(TextBlob(question).correct())
+    corrected = correct_spelling(question)
     q_emb = np.array(model.encode([corrected])).astype("float32")
     faiss.normalize_L2(q_emb)
- 
+
     n = len(valid_slides)
     if n <= 50:
         k = 1
@@ -156,13 +177,13 @@ def retrieve_best_slide(question, valid_slides, faiss_index):
     else:
         k = 5
     k = min(k, n)
- 
+
     distances, indices = faiss_index.search(q_emb, k=k)
     top_slides = [valid_slides[i] for i in indices[0]]
- 
+
     if k == 1:
         return corrected, top_slides[0]
- 
+
     client = Groq(api_key=st.session_state["groq_api_key"])
     slides_text = "\n\n".join([
         f"Slide {s['slide_id']}: {s['content'][:300]}"
@@ -171,12 +192,12 @@ def retrieve_best_slide(question, valid_slides, faiss_index):
     pick_prompt = f"""You are given {k} slides and a student question.
 Pick the ONE slide that best answers the question.
 Return ONLY the slide number as a single integer, nothing else.
- 
+
 {slides_text}
- 
+
 Question: {question}
 Best slide number:"""
- 
+
     response = client.chat.completions.create(
         model="llama-3.1-8b-instant",
         messages=[{"role": "user", "content": pick_prompt}],
@@ -187,9 +208,9 @@ Best slide number:"""
         result = next((s for s in top_slides if s["slide_id"] == best_id), top_slides[0])
     except:
         result = top_slides[0]
- 
+
     return corrected, result
- 
+
 def extract_relevant_snippet(question: str, content: str, max_len: int = 400) -> str:
     question_words = set(question.lower().split())
     sentences = re.split(r'(?<=[.!?])\s+', content)
@@ -201,33 +222,33 @@ def extract_relevant_snippet(question: str, content: str, max_len: int = 400) ->
     end = min(len(sentences), idx + 2)
     snippet = " ".join(sentences[start:end])
     return snippet[:max_len] + ("…" if len(snippet) > max_len else "")
- 
+
 def get_llm_explanation(question, snippet, api_key):
     client = Groq(api_key=api_key)
     prompt = f"""You are a helpful teaching assistant.
- 
+
 A student asked: {question}
- 
+
 The exact answer from the lecture slide is:
 "{snippet}"
- 
+
 Your job is to explain this answer simply and clearly in 2-3 sentences.
 Do NOT add any information that is not in the slide content above."""
- 
+
     response = client.chat.completions.create(
         model="llama-3.1-8b-instant",
         messages=[{"role": "user", "content": prompt}],
         max_tokens=300,
     )
     return response.choices[0].message.content.strip()
- 
+
 # ─────────────────────────────────────────────
 # Header
 # ─────────────────────────────────────────────
 st.title("📚 Learning Weakness Analytics")
 st.markdown("Upload your lecture slides, explore the content, and ask any question to find the right slide instantly.")
 st.markdown("---")
- 
+
 # ─────────────────────────────────────────────
 # Sidebar
 # ─────────────────────────────────────────────
@@ -245,17 +266,17 @@ with st.sidebar:
         s = st.session_state["slides_data"]
         st.metric("Slides loaded", len(s))
         st.metric("Non-empty", sum(1 for x in s if x["content"]))
- 
+
 # ─────────────────────────────────────────────
 # STEP 1 — Upload
 # ─────────────────────────────────────────────
 st.markdown('<div class="step-label">Step 1</div>', unsafe_allow_html=True)
 st.markdown("### 📤 Upload your PDF slides")
 uploaded_file = st.file_uploader("Choose a PDF file", type=["pdf"], label_visibility="collapsed")
- 
+
 if uploaded_file is not None:
     st.success(f"✅ **{uploaded_file.name}** uploaded successfully")
- 
+
     if st.button("🚀 Parse & Clean PDF", type="primary"):
         with st.spinner("Processing..."):
             try:
@@ -269,12 +290,12 @@ if uploaded_file is not None:
                     st.session_state["valid_slides"] = valid_slides
             except Exception as e:
                 st.error(f"❌ Error: {str(e)}")
- 
+
 if "slides_data" in st.session_state:
     slides_data = st.session_state["slides_data"]
- 
+
     st.markdown("---")
- 
+
     # ─────────────────────────────────────────────
     # STEP 2 — Stats
     # ─────────────────────────────────────────────
@@ -284,18 +305,18 @@ if "slides_data" in st.session_state:
     col1.metric("Total Slides", len(slides_data))
     col2.metric("Non-empty Slides", sum(1 for s in slides_data if s["content"]))
     col3.metric("Total Words", sum(s["word_count"] for s in slides_data))
- 
+
     st.markdown("---")
- 
+
     # ─────────────────────────────────────────────
     # STEP 3 — Preview slides as cards (with toggle)
     # ─────────────────────────────────────────────
     st.markdown('<div class="step-label">Step 3</div>', unsafe_allow_html=True)
     st.markdown("### 🔍 Slides Preview")
- 
+
     show_all = st.toggle("Show all slides", value=False)
     slides_to_show = slides_data if show_all else slides_data[:5]
- 
+
     cols = st.columns(2)
     for i, slide in enumerate(slides_to_show):
         with cols[i % 2]:
@@ -306,22 +327,22 @@ if "slides_data" in st.session_state:
                 <div class="slide-content">{preview}</div>
             </div>
             """, unsafe_allow_html=True)
- 
+
     if not show_all:
         st.caption(f"Showing 5 of {len(slides_data)} slides. Toggle to show all.")
- 
+
     st.markdown("---")
- 
+
     # ─────────────────────────────────────────────
     # STEP 4 — Download JSON
     # ─────────────────────────────────────────────
     st.markdown('<div class="step-label">Step 4</div>', unsafe_allow_html=True)
     st.markdown("### 💾 Download Dataset")
- 
+
     output_json = [{"slide_id": s["slide_id"], "content": s["content"]} for s in slides_data]
     json_str = json.dumps(output_json, ensure_ascii=False, indent=2)
     fname = st.session_state["filename"].replace(".pdf", "")
- 
+
     col_prev, col_dl = st.columns([2, 1])
     with col_prev:
         st.json(output_json[:2])
@@ -335,14 +356,14 @@ if "slides_data" in st.session_state:
             mime="application/json",
             type="primary"
         )
- 
+
 # ─────────────────────────────────────────────
 # STEP 5 — Chat Interface
 # ─────────────────────────────────────────────
 st.markdown("---")
 st.markdown('<div class="step-label">Step 5</div>', unsafe_allow_html=True)
 st.markdown("### 💬 Ask a Question")
- 
+
 if "slides_data" not in st.session_state:
     st.markdown("""
     <div class="no-file-warning">
@@ -352,20 +373,20 @@ if "slides_data" not in st.session_state:
 else:
     if "chat_history" not in st.session_state:
         st.session_state["chat_history"] = []
- 
+
     # display chat history
     for msg in st.session_state["chat_history"]:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
- 
+
     # chat input
     question = st.chat_input("Ask anything about your slides...")
- 
+
     if question:
         with st.chat_message("user"):
             st.markdown(question)
         st.session_state["chat_history"].append({"role": "user", "content": question})
- 
+
         with st.chat_message("assistant"):
             with st.spinner("Finding the right slide..."):
                 corrected, matched_slide = retrieve_best_slide(
@@ -373,12 +394,12 @@ else:
                     st.session_state["valid_slides"],
                     st.session_state["faiss_index"],
                 )
- 
+
             if corrected.lower() != question.strip().lower():
                 st.info(f"✏️ Spell-corrected to: **{corrected}**")
- 
+
             st.markdown(f"📌 **Found in Slide {matched_slide['slide_id']}**")
- 
+
             snippet = extract_relevant_snippet(question, matched_slide["content"])
             st.markdown(f"""
             <div class="result-box">
@@ -386,20 +407,20 @@ else:
                 <div class="result-content">{snippet}</div>
             </div>
             """, unsafe_allow_html=True)
- 
+
             with st.spinner("Generating explanation..."):
                 explanation = get_llm_explanation(
                     question,
                     snippet,
                     st.session_state["groq_api_key"]
                 )
- 
+
             st.markdown(f"""
             <div class="answer-box">
                 <div class="answer-label">🤖 AI Explanation</div>
                 <div class="answer-text">{explanation}</div>
             </div>
             """, unsafe_allow_html=True)
- 
+
             full_response = f"📌 **Slide {matched_slide['slide_id']}**\n\n📖 {snippet}\n\n🤖 {explanation}"
             st.session_state["chat_history"].append({"role": "assistant", "content": full_response})
