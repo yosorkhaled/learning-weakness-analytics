@@ -117,7 +117,7 @@ def correct_spelling(text):
     masked = text
     placeholders = {}
     for i, term in enumerate(TECHNICAL_TERMS):
-        placeholder = f"ZZZTECHZZZ{i}ZZZ"
+        placeholder = f"TECHTERM{i}"
         placeholders[placeholder] = term
         masked = re.sub(rf'\b{term}\b', placeholder, masked, flags=re.IGNORECASE)
     corrected = str(TextBlob(masked).correct())
@@ -179,7 +179,7 @@ def retrieve_best_slide(question, valid_slides, faiss_index):
     k = min(k, n)
 
     distances, indices = faiss_index.search(q_emb, k=k)
-    top_slides = [valid_slides[i] for i in indices[0] if i < len(valid_slides)]
+    top_slides = [valid_slides[i] for i in indices[0]]
 
     if k == 1:
         return corrected, top_slides[0]
@@ -411,7 +411,7 @@ else:
             with st.spinner("Generating explanation..."):
                 explanation = get_llm_explanation(
                     question,
-                    snippet,
+                    matched_slide["content"],
                     st.session_state["groq_api_key"]
                 )
 
