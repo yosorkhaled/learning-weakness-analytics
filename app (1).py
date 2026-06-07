@@ -117,7 +117,7 @@ def correct_spelling(text):
     masked = text
     placeholders = {}
     for i, term in enumerate(TECHNICAL_TERMS):
-        placeholder = f"TECHTERM{i}"
+        placeholder = f"ZZZTECHZZZ{i}ZZZ"
         placeholders[placeholder] = term
         masked = re.sub(rf'\b{term}\b', placeholder, masked, flags=re.IGNORECASE)
     corrected = str(TextBlob(masked).correct())
