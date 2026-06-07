@@ -179,7 +179,7 @@ def retrieve_best_slide(question, valid_slides, faiss_index):
     k = min(k, n)
 
     distances, indices = faiss_index.search(q_emb, k=k)
-    top_slides = [valid_slides[i] for i in indices[0]]
+    top_slides = [valid_slides[i] for i in indices[0] if i < len(valid_slides)]
 
     if k == 1:
         return corrected, top_slides[0]
