@@ -213,9 +213,9 @@ def get_llm_answer(question, top_slides, api_key):
     """LLM answers based on multiple slides — يستخدم raw_content للجواب الأدق."""
     client = Groq(api_key=api_key)
 
-    # ← raw_content بدل content عشان الـ LLM يشوف النص كامل
+    # ← عنوان + محتوى كامل بدون تقطيع عشان الـ LLM يشوف السياق الكامل
     slides_context = "\n\n".join([
-        f"Slide {s['slide_id']}:\n{s['raw_content'] or s['content']}"
+        f"Slide {s['slide_id']} | Title: {(s['raw_content'] or s['content'])[:100]}\nContent: {(s['raw_content'] or s['content'])}"
         for s in top_slides
     ])
 
