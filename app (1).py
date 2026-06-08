@@ -139,8 +139,8 @@ def parse_pdf(uploaded_file) -> list:
             cleaned = clean_text(raw_text) if raw_text else ""
             slides.append({
                 "slide_id": page_num,
-                "raw_content": raw_text or "",
-                "content": cleaned,
+                "raw_content": raw_text or "",   # ← للـ embedding والـ LLM
+                "content": cleaned,               # ← للعرض في الـ UI فقط
                 "word_count": len(cleaned.split()) if cleaned else 0
             })
     return slides
@@ -151,8 +151,9 @@ def load_model():
 
 def build_faiss_index(slides):
     model = load_model()
-    valid_slides = [s for s in slides if s["content"]]
-    texts = [s["content"] for s in valid_slides]
+    valid_slides = [s for s in slides if s["raw_content"] or s["content"]]
+    # ← استخدم raw_content للـ embedding
+    texts = [s["raw_content"] or s["content"] for s in valid_slides]
     embeddings = model.encode(texts, show_progress_bar=False)
     embeddings_np = np.array(embeddings).astype("float32")
     faiss.normalize_L2(embeddings_np)
@@ -179,7 +180,7 @@ Rewritten:"""
         return question
 
 def retrieve_top_slides(question, valid_slides, faiss_index, api_key, top_k=3):
-    """Retrieve top-k most relevant slides using query expansion."""
+    """Retrieve top-k most relevant slides using dual embedding + query expansion."""
     model = load_model()
 
     # Step 1: spell correction
@@ -188,9 +189,11 @@ def retrieve_top_slides(question, valid_slides, faiss_index, api_key, top_k=3):
     # Step 2: query expansion
     expanded = expand_query(corrected, api_key)
 
-    # Step 3: encode expanded query
-    q_emb = np.array(model.encode([expanded])).astype("float32")
-    faiss.normalize_L2(q_emb)
+    # Step 3: encode الاثنين وخذ المتوسط — أدق من الاعتماد على واحد بس
+    emb_original = np.array(model.encode([corrected])).astype("float32")
+    emb_expanded = np.array(model.encode([expanded])).astype("float32")
+    q_emb_np = (emb_original + emb_expanded) / 2
+    faiss.normalize_L2(q_emb_np)
 
     # Step 4: adaptive k based on document size
     n = len(valid_slides)
@@ -201,17 +204,18 @@ def retrieve_top_slides(question, valid_slides, faiss_index, api_key, top_k=3):
     else:
         k = min(5, n)
 
-    distances, indices = faiss_index.search(q_emb, k=k)
+    distances, indices = faiss_index.search(q_emb_np, k=k)
     top_slides = [valid_slides[i] for i in indices[0] if i < len(valid_slides)]
 
     return top_slides
 
 def get_llm_answer(question, top_slides, api_key):
-    """LLM answers based on multiple slides content."""
+    """LLM answers based on multiple slides — يستخدم raw_content للجواب الأدق."""
     client = Groq(api_key=api_key)
 
+    # ← raw_content بدل content عشان الـ LLM يشوف النص كامل
     slides_context = "\n\n".join([
-        f"Slide {s['slide_id']}:\n{s['content']}"
+        f"Slide {s['slide_id']}:\n{s['raw_content'] or s['content']}"
         for s in top_slides
     ])
 
@@ -231,7 +235,7 @@ Answer the student's question based ONLY on the slide content above.
     response = client.chat.completions.create(
         model="llama-3.1-8b-instant",
         messages=[{"role": "user", "content": prompt}],
-        max_tokens=400,
+        max_tokens=600,   # ← رفعنا من 400 لـ 600
     )
     return response.choices[0].message.content.strip()
 
@@ -397,8 +401,8 @@ else:
             slide_ids = ", ".join([f"Slide {s['slide_id']}" for s in top_slides])
             st.markdown(f"📌 **Searching in: {slide_ids}**")
 
-            # show snippet from best slide
-            snippet = extract_relevant_snippet(question, top_slides[0]["content"])
+            # snippet من raw_content للعرض
+            snippet = extract_relevant_snippet(question, top_slides[0]["raw_content"] or top_slides[0]["content"])
             st.markdown(f"""
             <div class="result-box">
                 <div class="answer-label" style="color:#7986cb;">📖 From the Slide</div>
