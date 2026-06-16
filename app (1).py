@@ -171,7 +171,7 @@ Return ONLY the rewritten question, nothing else. Keep it short (max 20 words).
 Question: {question}
 Rewritten:"""
         response = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
+            model="openai/gpt-oss-20b",
             messages=[{"role": "user", "content": prompt}],
             max_tokens=40,
         )
