@@ -233,7 +233,7 @@ Answer the student's question based ONLY on the slide content above.
 """
 
     response = client.chat.completions.create(
-        model="llama-3.1-8b-instant",
+        model="openai/gpt-oss-20b",
         messages=[{"role": "user", "content": prompt}],
         max_tokens=600,   # ← رفعنا من 400 لـ 600
     )
