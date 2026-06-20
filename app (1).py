@@ -270,7 +270,7 @@ with st.sidebar:
     4. **Ask** any question → get the matching slide + AI answer
     """)
     st.markdown("---")
-    st.session_state["groq_api_key"] = "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"
+    st.session_state["groq_api_key"] = st.secrets["GROQ_API_KEY"]
     if "slides_data" in st.session_state:
         s = st.session_state["slides_data"]
         st.metric("Slides loaded", len(s))
